@@ -1,22 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, CheckCircle, AlertTriangle } from 'lucide-react';
 
-const PredictPage = ({ addHistoryItem }) => {
-  const [selectedHospital, setSelectedHospital] = useState('Hospital A');
+const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  
-  const fileInputRef = useRef(null);
 
-  const hospitals = [
-    'Hospital A',
-    'Hospital B',
-    'Hospital C',
-    'Hospital D'
-  ];
+  const fileInputRef = useRef(null);
 
   const handleFileChange = (event) => {
     const file = event.target.files[0];
@@ -50,7 +42,7 @@ const PredictPage = ({ addHistoryItem }) => {
     setResult(null);
 
     const apiUrl = import.meta.env.VITE_API_URL;
-    
+
     if (!apiUrl) {
       setError('API URL is not configured. Please check your environment variables.');
       setIsLoading(false);
@@ -72,17 +64,17 @@ const PredictPage = ({ addHistoryItem }) => {
 
       const data = await response.json();
       setResult(data);
-      
+
       // Add to history
       addHistoryItem({
         date: new Date().toISOString(),
-        hospital: selectedHospital,
+        hospital: loggedInHospital,
         filename: selectedFile.name,
         prediction: data.prediction,
         confidence: data.confidence,
         model: 'Global Round-20 ResNet18'
       });
-      
+
     } catch (err) {
       setError('Unable to connect to the prediction server. Please make sure the Colab backend is running.');
       console.error(err);
@@ -108,60 +100,34 @@ const PredictPage = ({ addHistoryItem }) => {
         <p>Run inference using the global federated model</p>
       </div>
 
-      <div className="card">
-        <div className="card-header">Select Hospital</div>
-        <div className="form-group">
-          <select 
-            className="select-input"
-            value={selectedHospital}
-            onChange={(e) => setSelectedHospital(e.target.value)}
-          >
-            {hospitals.map(h => (
-              <option key={h} value={h}>{h}</option>
-            ))}
-          </select>
+      {/* Hospital & Model Info */}
+      <div className="card hospital-status-card">
+        <div className="status-row">
+          <span className="status-label">Current Hospital:</span>
+          <span className="status-value">🏥 {loggedInHospital}</span>
         </div>
-        
-        <div className="hospital-status-card card" style={{ marginBottom: 0, padding: '1rem' }}>
-          <div className="status-row">
-            <span className="status-label">Selected Hospital:</span>
-            <span className="status-value">{selectedHospital}</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Training Data:</span>
-            <span className="status-value">1,446 images</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">NORMAL:</span>
-            <span className="status-value">723</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">PNEUMONIA:</span>
-            <span className="status-value">723</span>
-          </div>
-          
-          <div style={{ marginTop: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-            Hospital-specific training is represented for the federated-learning dashboard. Prediction currently uses the aggregated Global Round-20 ResNet18 model.
-          </div>
-
-          <hr style={{ margin: '1rem 0', borderColor: 'var(--border-color)', borderBottom: 'none' }} />
-
-          <div className="status-row" style={{ marginBottom: '0.5rem' }}>
-            <span className="status-label">Model Used for Prediction:</span>
-            <span className="status-value">Global Round-20 ResNet18</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Status:</span>
-            <span className="status-value status-ready">Ready for Prediction</span>
-          </div>
+        <div className="status-row">
+          <span className="status-label">Global Model:</span>
+          <span className="status-value">ResNet18 – Federated Round 20</span>
+        </div>
+        <div className="status-row">
+          <span className="status-label">Federated Learning:</span>
+          <span className="status-value">4 Hospitals · 20 Rounds · FedAvg</span>
+        </div>
+        <div className="status-row">
+          <span className="status-label">Status:</span>
+          <span className="status-value status-ready">Ready for Prediction</span>
+        </div>
+        <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          Prediction is performed using the shared global model, not a hospital-specific model.
         </div>
       </div>
 
       <div className="card">
         <div className="card-header">Upload Chest X-Ray</div>
-        
+
         {!previewUrl ? (
-          <div 
+          <div
             className="upload-area"
             onClick={() => fileInputRef.current?.click()}
           >
@@ -204,7 +170,7 @@ const PredictPage = ({ addHistoryItem }) => {
             </div>
             <div className="result-meta">
               <span>Model Used: Global Round-20 ResNet18</span>
-              <span>Selected Hospital: {selectedHospital}</span>
+              <span>Hospital: {loggedInHospital}</span>
             </div>
           </div>
         )}
@@ -216,7 +182,7 @@ const PredictPage = ({ addHistoryItem }) => {
               onClick={handlePredict}
               disabled={isLoading || !selectedFile}
             >
-              {isLoading ? 'Analyzing X-ray...' : 'Predict'}
+              {isLoading ? 'Analyzing X-ray...' : 'Analyze Image'}
             </button>
           ) : null}
 
@@ -230,6 +196,10 @@ const PredictPage = ({ addHistoryItem }) => {
             </button>
           )}
         </div>
+      </div>
+
+      <div className="info-alert">
+        For educational and research purposes only. This system is not a medical diagnostic tool.
       </div>
     </div>
   );
