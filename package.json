@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:frontend": "node --test tests/frontend_api.test.js",
+    "test:backend": "/Users/pritikaaa/PneuFed/.venv/bin/pytest tests/test_backend.py -v",
+    "test": "npm run test:frontend && npm run test:backend"
   },
   "dependencies": {
     "lucide-react": "^1.47.0",

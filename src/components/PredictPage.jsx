@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, CheckCircle, AlertTriangle } from 'lucide-react';
+import { predictImage } from '../utils/api';
 
 const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -9,6 +10,28 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
   const [error, setError] = useState(null);
 
   const fileInputRef = useRef(null);
+
+  const [customApiUrl, setCustomApiUrl] = useState(() => {
+    return (typeof window !== 'undefined' && localStorage.getItem('pneufed_api_url')) || '';
+  });
+
+  const apiUrl = customApiUrl || import.meta.env.VITE_API_URL || '';
+
+  const handleUpdateApiUrl = () => {
+    const current = customApiUrl || import.meta.env.VITE_API_URL || '';
+    const input = window.prompt('Enter Google Colab ngrok URL (e.g. https://xxxx.ngrok-free.dev):', current);
+    if (input !== null) {
+      const clean = input.trim().replace(/\/+$/, '');
+      if (clean) {
+        localStorage.setItem('pneufed_api_url', clean);
+        setCustomApiUrl(clean);
+        setError(null);
+      } else {
+        localStorage.removeItem('pneufed_api_url');
+        setCustomApiUrl('');
+      }
+    }
+  };
 
   const handleFileChange = (event) => {
     const file = event.target.files[0];
@@ -41,28 +64,14 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
     setError(null);
     setResult(null);
 
-    const apiUrl = import.meta.env.VITE_API_URL;
-
     if (!apiUrl) {
-      setError('API URL is not configured. Please check your environment variables.');
+      setError('API URL is not configured. Please click "Update URL" above to set your Colab ngrok endpoint.');
       setIsLoading(false);
       return;
     }
 
-    const formData = new FormData();
-    formData.append('image', selectedFile);
-
     try {
-      const response = await fetch(`${apiUrl}/predict`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server responded with status: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await predictImage(apiUrl, selectedFile);
       setResult(data);
 
       // Add to history
@@ -72,11 +81,15 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
         filename: selectedFile.name,
         prediction: data.prediction,
         confidence: data.confidence,
-        model: 'Global Round-20 ResNet18'
+        model: data.model || 'Global Round-20 ResNet18'
       });
 
     } catch (err) {
-      setError('Unable to connect to the prediction server. Please make sure the Colab backend is running.');
+      const isNetworkErr = err?.name === 'TypeError' || err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError');
+      const errorMsg = isNetworkErr
+        ? 'Unable to connect to the prediction server. Please make sure the Colab backend and ngrok tunnel are running, and VITE_API_URL is up to date.'
+        : (err?.message || 'Prediction failed. Please check the backend.');
+      setError(errorMsg);
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -113,6 +126,29 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
         <div className="status-row">
           <span className="status-label">Federated Learning:</span>
           <span className="status-value">4 Hospitals · 20 Rounds · FedAvg</span>
+        </div>
+        <div className="status-row">
+          <span className="status-label">Backend API:</span>
+          <span className="status-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>
+              {apiUrl ? apiUrl.replace(/^https?:\/\//, '') : 'Not configured'}
+            </span>
+            <button
+              type="button"
+              onClick={handleUpdateApiUrl}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-color, #475569)',
+                color: 'var(--primary, #38bdf8)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                padding: '0.15rem 0.5rem',
+                borderRadius: '4px'
+              }}
+            >
+              Update URL
+            </button>
+          </span>
         </div>
         <div className="status-row">
           <span className="status-label">Status:</span>
@@ -155,7 +191,25 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
 
         {error && (
           <div className="error-alert" style={{ marginTop: '1.5rem', marginBottom: 0 }}>
-            {error}
+            <div>{error}</div>
+            {(error.includes('ngrok') || error.includes('connect') || error.includes('Colab') || error.includes('URL')) && (
+              <button
+                type="button"
+                onClick={handleUpdateApiUrl}
+                style={{
+                  marginTop: '0.75rem',
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid currentColor',
+                  color: 'inherit',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+              >
+                Update ngrok API URL
+              </button>
+            )}
           </div>
         )}
 
