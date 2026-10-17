@@ -94,6 +94,23 @@ test('parsePredictionResponse extracts backend error message on 500 status', asy
   );
 });
 
+test('parsePredictionResponse extracts FastAPI detail field on error status', async () => {
+  const mockResponse = {
+    ok: false,
+    status: 400,
+    json: async () => ({
+      detail: 'Invalid image format',
+    }),
+  };
+
+  await assert.rejects(
+    async () => await parsePredictionResponse(mockResponse),
+    {
+      message: 'Invalid image format',
+    }
+  );
+});
+
 test('parsePredictionResponse rejects unknown prediction classes', async () => {
   const mockResponse = {
     ok: true,

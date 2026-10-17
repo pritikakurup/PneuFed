@@ -23,7 +23,7 @@ export async function parsePredictionResponse(response) {
   }
 
   if (!response.ok) {
-    const errorMsg = data?.error || data?.message || `Server responded with status: ${response.status}`;
+    const errorMsg = data?.error || data?.detail || data?.message || `Server responded with status: ${response.status}`;
     throw new Error(errorMsg);
   }
 
