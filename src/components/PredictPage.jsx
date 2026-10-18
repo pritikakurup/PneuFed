@@ -12,14 +12,21 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
   const fileInputRef = useRef(null);
 
   const [customApiUrl, setCustomApiUrl] = useState(() => {
-    return (typeof window !== 'undefined' && localStorage.getItem('pneufed_api_url')) || '';
+    if (typeof window === 'undefined') return '';
+    const saved = localStorage.getItem('pneufed_api_url');
+    // Sanitize stale ngrok/colab URLs so production VITE_API_URL is not overridden by dead tunnels
+    if (saved && (saved.includes('ngrok') || saved.includes('colab'))) {
+      localStorage.removeItem('pneufed_api_url');
+      return '';
+    }
+    return saved || '';
   });
 
   const apiUrl = customApiUrl || import.meta.env.VITE_API_URL || '';
 
   const handleUpdateApiUrl = () => {
     const current = customApiUrl || import.meta.env.VITE_API_URL || '';
-    const input = window.prompt('Enter Google Colab ngrok URL (e.g. https://xxxx.ngrok-free.dev):', current);
+    const input = window.prompt('Enter backend API URL (e.g. https://pneufed-api.onrender.com):', current);
     if (input !== null) {
       const clean = input.trim().replace(/\/+$/, '');
       if (clean) {
@@ -65,7 +72,7 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
     setResult(null);
 
     if (!apiUrl) {
-      setError('API URL is not configured. Please click "Update URL" above to set your Colab ngrok endpoint.');
+      setError('API URL is not configured. Please set the VITE_API_URL environment variable or use "Configure URL" to set your backend endpoint.');
       setIsLoading(false);
       return;
     }
@@ -87,7 +94,7 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
     } catch (err) {
       const isNetworkErr = err?.name === 'TypeError' || err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError');
       const errorMsg = isNetworkErr
-        ? 'Unable to connect to the prediction server. Please make sure the Colab backend and ngrok tunnel are running, and VITE_API_URL is up to date.'
+        ? 'Unable to connect to the prediction server. If the service is waking up from idle mode (cold start), please wait 30 seconds and try again.'
         : (err?.message || 'Prediction failed. Please check the backend.');
       setError(errorMsg);
       console.error(err);
@@ -146,7 +153,7 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
                 borderRadius: '4px'
               }}
             >
-              Update URL
+              Configure URL
             </button>
           </span>
         </div>
@@ -192,7 +199,7 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
         {error && (
           <div className="error-alert" style={{ marginTop: '1.5rem', marginBottom: 0 }}>
             <div>{error}</div>
-            {(error.includes('ngrok') || error.includes('connect') || error.includes('Colab') || error.includes('URL')) && (
+            {(error.includes('connect') || error.includes('server') || error.includes('configured') || error.includes('URL') || error.includes('backend')) && (
               <button
                 type="button"
                 onClick={handleUpdateApiUrl}
@@ -207,7 +214,7 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
                   fontSize: '0.85rem'
                 }}
               >
-                Update ngrok API URL
+                Configure Backend URL
               </button>
             )}
           </div>
