@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import asynccontextmanager
 from typing import Optional
-from PIL import Image
+from PIL import Image, ImageOps
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,8 +90,11 @@ def predict_image(image_bytes: bytes, model: nn.Module, device: torch.device):
     """
     Takes raw image bytes, runs through ResNet18, and returns:
     (prediction_label, confidence_percentage)
+    Handles EXIF orientation metadata appropriately without blind rotation.
     """
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    raw_image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(raw_image) or raw_image
+    image = image.convert("RGB")
     tensor = preprocess(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -123,14 +126,17 @@ def create_fastapi_app(injected_model=None, injected_device=None, skip_model_loa
             model_container["model"] = None
             model_container["is_loaded"] = False
             model_container["model_path"] = None
+            model_container["skip_model_load"] = True
             print("⚠️ FastAPI initialized with model loading skipped")
         elif injected_model is not None:
             model_container["model"] = injected_model
             model_container["device"] = injected_device or torch.device("cpu")
             model_container["model_path"] = "injected_test_model"
             model_container["is_loaded"] = True
+            model_container["skip_model_load"] = False
             print("✅ Injected model registered for FastAPI")
         else:
+            model_container["skip_model_load"] = False
             try:
                 model, device, path = load_model()
                 model_container["model"] = model
@@ -155,7 +161,7 @@ def create_fastapi_app(injected_model=None, injected_device=None, skip_model_loa
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -214,7 +220,19 @@ def create_fastapi_app(injected_model=None, injected_device=None, skip_model_loa
             raise HTTPException(status_code=400, detail="Empty filename")
 
         if not model_container["is_loaded"] or model_container["model"] is None:
-            raise HTTPException(status_code=503, detail="Prediction model is not connected yet")
+            # Fallback: attempt load once if not explicitly skipped in tests
+            if not model_container.get("skip_model_load", False):
+                try:
+                    loaded_model, detected_device, loaded_path = load_model()
+                    model_container["model"] = loaded_model
+                    model_container["device"] = detected_device
+                    model_container["model_path"] = loaded_path
+                    model_container["is_loaded"] = True
+                except Exception:
+                    pass
+
+            if not model_container["is_loaded"] or model_container["model"] is None:
+                raise HTTPException(status_code=503, detail="Prediction model is not connected yet")
 
         contents = await image.read()
         if not contents or len(contents) == 0:

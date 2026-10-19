@@ -148,3 +148,53 @@ def test_cors_headers_and_ngrok_support(client_with_real_model):
     assert response.status_code == 200
     assert response.headers.get("Access-Control-Allow-Origin") == "*"
     assert "ngrok-skip-browser-warning" in response.headers.get("Access-Control-Allow-Headers", "")
+
+
+def test_predict_portrait_and_landscape_orientations(client_with_real_model):
+    """Tests that Flask backend handles both portrait and landscape orientations for NORMAL and PNEUMONIA."""
+    # NORMAL Portrait
+    norm_p = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1285-0001.jpeg"
+    with open(norm_p, "rb") as f:
+        res = client_with_real_model.post("/predict", data={"image": (io.BytesIO(f.read()), "norm_p.jpeg")}, content_type="multipart/form-data")
+    assert res.status_code == 200
+    assert res.get_json()["prediction"] == "NORMAL"
+
+    # NORMAL Landscape
+    norm_l = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1326-0001.jpeg"
+    with open(norm_l, "rb") as f:
+        res = client_with_real_model.post("/predict", data={"image": (io.BytesIO(f.read()), "norm_l.jpeg")}, content_type="multipart/form-data")
+    assert res.status_code == 200
+    assert res.get_json()["prediction"] == "NORMAL"
+
+    # PNEUMONIA Portrait
+    pneu_p = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/PNEUMONIA/person1010_bacteria_2941.jpeg"
+    with open(pneu_p, "rb") as f:
+        res = client_with_real_model.post("/predict", data={"image": (io.BytesIO(f.read()), "pneu_p.jpeg")}, content_type="multipart/form-data")
+    assert res.status_code == 200
+    assert res.get_json()["prediction"] == "PNEUMONIA"
+
+    # PNEUMONIA Landscape
+    pneu_l = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/PNEUMONIA/person321_bacteria_1489.jpeg"
+    with open(pneu_l, "rb") as f:
+        res = client_with_real_model.post("/predict", data={"image": (io.BytesIO(f.read()), "pneu_l.jpeg")}, content_type="multipart/form-data")
+    assert res.status_code == 200
+    assert res.get_json()["prediction"] == "PNEUMONIA"
+
+
+def test_predict_exif_orientation_handling(client_with_real_model):
+    """Tests that images with EXIF orientation metadata are properly rotated without blind rotation."""
+    base_img = Image.open("/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1285-0001.jpeg")
+    sideways = base_img.rotate(270, expand=True)
+    exif = sideways.getexif()
+    exif[0x0112] = 6
+
+    buf = io.BytesIO()
+    sideways.save(buf, format="JPEG", exif=exif)
+    buf.seek(0)
+
+    res = client_with_real_model.post("/predict", data={"image": (buf, "exif_portrait.jpg")}, content_type="multipart/form-data")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["prediction"] == "NORMAL"
+    assert data["confidence"] >= 90.0
+

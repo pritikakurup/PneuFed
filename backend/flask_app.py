@@ -3,7 +3,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageOps
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from torchvision import models, transforms
@@ -87,8 +87,11 @@ def predict_image(image_bytes, model, device):
     """
     Takes raw image bytes and returns:
     (prediction_label, confidence_percentage)
+    Handles EXIF orientation metadata appropriately without blind rotation.
     """
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    raw_image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(raw_image) or raw_image
+    image = image.convert("RGB")
     tensor = preprocess(image).unsqueeze(0).to(device)
 
     with torch.no_grad():

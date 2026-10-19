@@ -1,11 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UploadCloud, CheckCircle, AlertTriangle } from 'lucide-react';
-import { predictImage } from '../utils/api';
+import { predictImage, checkHealth, normalizeApiUrl } from '../utils/api';
 
 const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isWarmingUp, setIsWarmingUp] = useState(false);
+  const [backendStatus, setBackendStatus] = useState('Checking...');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
@@ -19,10 +21,48 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
       localStorage.removeItem('pneufed_api_url');
       return '';
     }
-    return saved || '';
+    if (saved) {
+      const normalized = normalizeApiUrl(saved);
+      if (normalized && normalized !== saved) {
+        localStorage.setItem('pneufed_api_url', normalized);
+      }
+      return normalized || '';
+    }
+    return '';
   });
 
-  const apiUrl = customApiUrl || import.meta.env.VITE_API_URL || '';
+  const apiUrl = normalizeApiUrl(customApiUrl || import.meta.env.VITE_API_URL || '');
+
+  // Proactively check backend health and wake up Render on load
+  useEffect(() => {
+    let isMounted = true;
+    if (!apiUrl) {
+      setBackendStatus('Not configured');
+      return;
+    }
+
+    setBackendStatus('Checking...');
+    checkHealth(apiUrl, { timeoutMs: 15000 })
+      .then((data) => {
+        if (isMounted) {
+          if (data?.model_loaded) {
+            setBackendStatus('Ready for Prediction');
+          } else {
+            setBackendStatus('Online (Model Loading)');
+          }
+        }
+      })
+      .catch((err) => {
+        if (isMounted) {
+          console.warn('Initial backend health check notice:', err?.message);
+          setBackendStatus('Standby / Cold Start');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [apiUrl]);
 
   const handleUpdateApiUrl = () => {
     const current = customApiUrl || import.meta.env.VITE_API_URL || '';
@@ -30,8 +70,9 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
     if (input !== null) {
       const clean = input.trim().replace(/\/+$/, '');
       if (clean) {
-        localStorage.setItem('pneufed_api_url', clean);
-        setCustomApiUrl(clean);
+        const normalized = normalizeApiUrl(clean);
+        localStorage.setItem('pneufed_api_url', normalized);
+        setCustomApiUrl(normalized);
         setError(null);
       } else {
         localStorage.removeItem('pneufed_api_url');
@@ -68,37 +109,63 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
     }
 
     setIsLoading(true);
+    setIsWarmingUp(false);
     setError(null);
     setResult(null);
 
-    if (!apiUrl) {
-      setError('API URL is not configured. Please set the VITE_API_URL environment variable or use "Configure URL" to set your backend endpoint.');
-      setIsLoading(false);
-      return;
-    }
+    // If request takes longer than 4 seconds, show warming up notice for cold starts
+    const warmUpTimer = setTimeout(() => {
+      setIsWarmingUp(true);
+    }, 4000);
 
     try {
+      if (!apiUrl) {
+        throw new Error('API URL is not configured. Please set the VITE_API_URL environment variable or use "Configure URL" to set your backend endpoint.');
+      }
+
       const data = await predictImage(apiUrl, selectedFile);
       setResult(data);
+      setBackendStatus('Ready for Prediction');
 
       // Add to history
-      addHistoryItem({
-        date: new Date().toISOString(),
-        hospital: loggedInHospital,
-        filename: selectedFile.name,
-        prediction: data.prediction,
-        confidence: data.confidence,
-        model: data.model || 'Global Round-20 ResNet18'
-      });
+      if (typeof addHistoryItem === 'function') {
+        try {
+          addHistoryItem({
+            date: new Date().toISOString(),
+            hospital: loggedInHospital,
+            filename: selectedFile.name,
+            prediction: data.prediction,
+            confidence: data.confidence,
+            model: data.model || 'Global Round-20 ResNet18'
+          });
+        } catch (historyErr) {
+          console.warn('Could not record history item:', historyErr);
+        }
+      }
 
     } catch (err) {
-      const isNetworkErr = err?.name === 'TypeError' || err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError');
-      const errorMsg = isNetworkErr
-        ? 'Unable to connect to the prediction server. If the service is waking up from idle mode (cold start), please wait 30 seconds and try again.'
-        : (err?.message || 'Prediction failed. Please check the backend.');
+      const isNetworkErr =
+        err?.name === 'TypeError' ||
+        err?.name === 'AbortError' ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.message?.includes('NetworkError') ||
+        err?.message?.includes('timed out');
+
+      const isTimeout = err?.message?.includes('timed out');
+
+      let errorMsg;
+      if (isTimeout) {
+        errorMsg = err.message;
+      } else if (isNetworkErr) {
+        errorMsg = 'Unable to connect to the prediction server. If the service is waking up from idle mode (cold start), please wait 30 seconds and try again.';
+      } else {
+        errorMsg = err?.message || 'Prediction failed. Please check the backend.';
+      }
       setError(errorMsg);
-      console.error(err);
+      console.error('Prediction request error:', err);
     } finally {
+      clearTimeout(warmUpTimer);
+      setIsWarmingUp(false);
       setIsLoading(false);
     }
   };
@@ -159,7 +226,9 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
         </div>
         <div className="status-row">
           <span className="status-label">Status:</span>
-          <span className="status-value status-ready">Ready for Prediction</span>
+          <span className={`status-value ${backendStatus === 'Ready for Prediction' ? 'status-ready' : ''}`}>
+            {backendStatus}
+          </span>
         </div>
         <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           Prediction is performed using the shared global model, not a hospital-specific model.
@@ -238,13 +307,20 @@ const PredictPage = ({ addHistoryItem, loggedInHospital }) => {
 
         <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {!result ? (
-            <button
-              className="btn btn-primary"
-              onClick={handlePredict}
-              disabled={isLoading || !selectedFile}
-            >
-              {isLoading ? 'Analyzing X-ray...' : 'Analyze Image'}
-            </button>
+            <>
+              <button
+                className="btn btn-primary"
+                onClick={handlePredict}
+                disabled={isLoading || !selectedFile}
+              >
+                {isLoading ? 'Analyzing X-ray...' : 'Analyze Image'}
+              </button>
+              {isLoading && isWarmingUp && (
+                <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', textAlign: 'center', margin: '-0.25rem 0' }}>
+                  ⏳ Processing X-ray... Free-tier backend may take 30–50s if waking up from idle mode.
+                </div>
+              )}
+            </>
           ) : null}
 
           {(previewUrl || result || error) && (

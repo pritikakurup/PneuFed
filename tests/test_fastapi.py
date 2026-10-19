@@ -138,3 +138,87 @@ def test_fastapi_cors_and_custom_headers(client_with_model):
     response = client_with_model.options("/predict", headers=headers)
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_fastapi_predict_portrait_and_landscape_normal(client_with_model):
+    """Tests that both portrait and landscape NORMAL X-rays are correctly classified."""
+    # Portrait NORMAL (height > width: 1962w x 2169h)
+    portrait_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1285-0001.jpeg"
+    with open(portrait_path, "rb") as f:
+        res_p = client_with_model.post("/predict", files={"image": ("portrait_normal.jpeg", io.BytesIO(f.read()), "image/jpeg")})
+    assert res_p.status_code == 200
+    assert res_p.json()["prediction"] == "NORMAL"
+    assert res_p.json()["confidence"] >= 50.0
+
+    # Landscape NORMAL (width > height: 1188w x 885h)
+    landscape_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1326-0001.jpeg"
+    with open(landscape_path, "rb") as f:
+        res_l = client_with_model.post("/predict", files={"image": ("landscape_normal.jpeg", io.BytesIO(f.read()), "image/jpeg")})
+    assert res_l.status_code == 200
+    assert res_l.json()["prediction"] == "NORMAL"
+    assert res_l.json()["confidence"] >= 50.0
+
+
+def test_fastapi_predict_portrait_and_landscape_pneumonia(client_with_model):
+    """Tests that both portrait and landscape PNEUMONIA X-rays are correctly classified."""
+    # Portrait PNEUMONIA (height > width: 1328w x 1368h)
+    portrait_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/PNEUMONIA/person1010_bacteria_2941.jpeg"
+    with open(portrait_path, "rb") as f:
+        res_p = client_with_model.post("/predict", files={"image": ("portrait_pneu.jpeg", io.BytesIO(f.read()), "image/jpeg")})
+    assert res_p.status_code == 200
+    assert res_p.json()["prediction"] == "PNEUMONIA"
+    assert res_p.json()["confidence"] >= 50.0
+
+    # Landscape PNEUMONIA (width > height: 1186w x 866h)
+    landscape_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/PNEUMONIA/person321_bacteria_1489.jpeg"
+    with open(landscape_path, "rb") as f:
+        res_l = client_with_model.post("/predict", files={"image": ("landscape_pneu.jpeg", io.BytesIO(f.read()), "image/jpeg")})
+    assert res_l.status_code == 200
+    assert res_l.json()["prediction"] == "PNEUMONIA"
+    assert res_l.json()["confidence"] >= 50.0
+
+
+def test_fastapi_predict_exif_orientation_handling(client_with_model):
+    """Tests that images with EXIF orientation metadata are properly rotated without blind rotation."""
+    base_img = Image.open("/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/NORMAL2-IM-1285-0001.jpeg")
+    # Simulate a smartphone photo taken sideways with EXIF tag 6 (rotate 90 CW to view upright)
+    sideways = base_img.rotate(270, expand=True)
+    exif = sideways.getexif()
+    exif[0x0112] = 6
+
+    buf = io.BytesIO()
+    sideways.save(buf, format="JPEG", exif=exif)
+    buf.seek(0)
+
+    res = client_with_model.post("/predict", files={"image": ("exif_portrait.jpg", buf, "image/jpeg")})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["prediction"] == "NORMAL"
+    assert data["confidence"] >= 90.0
+
+
+def test_fastapi_predict_repeated_predictions_without_restart(client_with_model):
+    """Tests that client can execute sequential predictions (NORMAL -> PNEUMONIA -> NORMAL) without state contamination or restarting."""
+    norm_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/NORMAL/synthetic_2151.jpg"
+    pneu_path = "/Users/pritikaaa/PneuFed/data/New_Dataset/test/PNEUMONIA/person321_bacteria_1489.jpeg"
+
+    with open(norm_path, "rb") as fn, open(pneu_path, "rb") as fp:
+        norm_bytes = fn.read()
+        pneu_bytes = fp.read()
+
+    # Call 1: NORMAL
+    r1 = client_with_model.post("/predict", files={"image": ("test1.jpg", io.BytesIO(norm_bytes), "image/jpeg")})
+    assert r1.status_code == 200
+    assert r1.json()["prediction"] == "NORMAL"
+
+    # Call 2: PNEUMONIA
+    r2 = client_with_model.post("/predict", files={"image": ("test2.jpeg", io.BytesIO(pneu_bytes), "image/jpeg")})
+    assert r2.status_code == 200
+    assert r2.json()["prediction"] == "PNEUMONIA"
+
+    # Call 3: NORMAL
+    r3 = client_with_model.post("/predict", files={"image": ("test3.jpg", io.BytesIO(norm_bytes), "image/jpeg")})
+    assert r3.status_code == 200
+    assert r3.json()["prediction"] == "NORMAL"
+
+

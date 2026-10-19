@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeApiUrl, parsePredictionResponse } from '../src/utils/api.js';
+import { normalizeApiUrl, parsePredictionResponse, predictImage, checkHealth } from '../src/utils/api.js';
 
 test('normalizeApiUrl handles clean and trailing-slash URLs', () => {
   assert.equal(normalizeApiUrl('https://example.ngrok-free.dev'), 'https://example.ngrok-free.dev');
@@ -142,3 +142,71 @@ test('parsePredictionResponse rejects invalid confidence values', async () => {
     /Invalid confidence value returned/
   );
 });
+
+test('normalizeApiUrl auto-prepends https:// for bare domains without protocol', () => {
+  assert.equal(normalizeApiUrl('pneufed-api.onrender.com'), 'https://pneufed-api.onrender.com');
+  assert.equal(normalizeApiUrl('pneufed-api.onrender.com/'), 'https://pneufed-api.onrender.com');
+  assert.equal(normalizeApiUrl('http://pneufed-api.onrender.com'), 'https://pneufed-api.onrender.com');
+  assert.equal(normalizeApiUrl('http://localhost:5000'), 'http://localhost:5000');
+  assert.equal(normalizeApiUrl('http://127.0.0.1:8000'), 'http://127.0.0.1:8000');
+});
+
+test('predictImage rejects with clear cold-start message when request times out', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, options) => {
+    return new Promise((_, reject) => {
+      options.signal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  };
+
+  try {
+    const dummyBlob = new Blob(['dummy'], { type: 'image/jpeg' });
+    await assert.rejects(
+      async () => await predictImage('https://pneufed-api.onrender.com', dummyBlob, { timeoutMs: 50 }),
+      /Prediction request timed out after 0 seconds/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('predictImage supports repeated predictions sequentially', async () => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async (url) => {
+    callCount++;
+    const isEven = callCount % 2 === 0;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        prediction: isEven ? 'PNEUMONIA' : 'NORMAL',
+        confidence: 99.5,
+        model: 'Global Round-20 ResNet18',
+      }),
+    };
+  };
+
+  try {
+    const dummyBlob = new Blob(['image data'], { type: 'image/jpeg' });
+    const res1 = await predictImage('https://pneufed-api.onrender.com', dummyBlob);
+    assert.equal(res1.prediction, 'NORMAL');
+
+    const res2 = await predictImage('https://pneufed-api.onrender.com', dummyBlob);
+    assert.equal(res2.prediction, 'PNEUMONIA');
+
+    const res3 = await predictImage('https://pneufed-api.onrender.com', dummyBlob);
+    assert.equal(res3.prediction, 'NORMAL');
+    assert.equal(callCount, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+
+

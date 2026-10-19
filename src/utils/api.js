@@ -1,9 +1,27 @@
+export const DEFAULT_PREDICT_TIMEOUT_MS = 60000;
+export const DEFAULT_HEALTH_TIMEOUT_MS = 15000;
+
 /**
- * Normalizes an API URL by trimming whitespace and removing trailing slashes.
+ * Normalizes an API URL by trimming whitespace, removing trailing slashes,
+ * and ensuring an explicit protocol is present (defaults to https://).
+ * Also upgrades insecure remote http:// URLs to https:// to prevent mixed-content blocks.
  */
 export function normalizeApiUrl(url) {
-  if (!url) return '';
-  return url.trim().replace(/\/+$/, '');
+  if (!url || typeof url !== 'string') return '';
+  let cleaned = url.trim().replace(/\/+$/, '');
+  if (!cleaned) return '';
+
+  // If no scheme is provided, prepend https://
+  if (!/^https?:\/\//i.test(cleaned)) {
+    cleaned = `https://${cleaned}`;
+  }
+
+  // If http:// is used for a remote host (non-localhost), upgrade to https://
+  if (/^http:\/\//i.test(cleaned) && !/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^http:\/\//i, 'https://');
+  }
+
+  return cleaned;
 }
 
 /**
@@ -53,47 +71,101 @@ export async function parsePredictionResponse(response) {
 }
 
 /**
- * Sends an X-ray image to the backend /predict endpoint.
+ * Sends an X-ray image to the backend /predict endpoint with a timeout to handle
+ * Render cold starts and avoid hanging requests.
+ *
+ * @param {string} apiUrl - The base API URL.
+ * @param {File|Blob} file - The chest X-ray image file.
+ * @param {object} [options] - Optional settings (e.g., timeoutMs).
  */
-export async function predictImage(apiUrl, file) {
+export async function predictImage(apiUrl, file, options = {}) {
   const baseUrl = normalizeApiUrl(apiUrl);
   if (!baseUrl) {
-    throw new Error('API URL is not configured. Please check your environment variables.');
+    throw new Error('API URL is not configured. Please set VITE_API_URL or use Configure URL.');
   }
+
+  if (!file) {
+    throw new Error('No image file selected. Please select a valid X-ray image.');
+  }
+
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PREDICT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timerId = setTimeout(() => {
+    controller.abort(
+      new Error(`Prediction request timed out after ${Math.round(timeoutMs / 1000)} seconds. If the backend is waking up from idle mode (cold start), please wait 15 seconds and try again.`)
+    );
+  }, timeoutMs);
 
   const formData = new FormData();
   formData.append('image', file);
 
-  const response = await fetch(`${baseUrl}/predict`, {
-    method: 'POST',
-    headers: {
-      'ngrok-skip-browser-warning': 'true',
-    },
-    body: formData,
-  });
+  try {
+    const response = await fetch(`${baseUrl}/predict`, {
+      method: 'POST',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: formData,
+      signal: controller.signal,
+    });
 
-  return parsePredictionResponse(response);
+    return await parsePredictionResponse(response);
+  } catch (err) {
+    if (controller.signal.aborted) {
+      const abortReason = controller.signal.reason;
+      if (abortReason instanceof Error) {
+        throw abortReason;
+      }
+      throw new Error(`Prediction request timed out after ${Math.round(timeoutMs / 1000)} seconds. If the backend is waking up from idle mode (cold start), please wait 15 seconds and try again.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timerId);
+  }
 }
 
 /**
- * Checks the health status of the backend API.
+ * Checks the health status of the backend API with an explicit timeout.
+ *
+ * @param {string} apiUrl - The base API URL.
+ * @param {object} [options] - Optional settings (e.g., timeoutMs).
  */
-export async function checkHealth(apiUrl) {
+export async function checkHealth(apiUrl, options = {}) {
   const baseUrl = normalizeApiUrl(apiUrl);
   if (!baseUrl) {
     throw new Error('API URL is not configured.');
   }
 
-  const response = await fetch(`${baseUrl}/health`, {
-    method: 'GET',
-    headers: {
-      'ngrok-skip-browser-warning': 'true',
-    },
-  });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timerId = setTimeout(() => {
+    controller.abort(new Error(`Health check timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+  }, timeoutMs);
 
-  if (!response.ok) {
-    throw new Error(`Health check failed with status: ${response.status}`);
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      method: 'GET',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Health check failed with status: ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (err) {
+    if (controller.signal.aborted) {
+      const abortReason = controller.signal.reason;
+      if (abortReason instanceof Error) {
+        throw abortReason;
+      }
+      throw new Error(`Health check timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timerId);
   }
-
-  return response.json();
 }
